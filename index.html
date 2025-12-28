@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>대용량 로그 분할기 (Log Splitter)</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; max-width: 800px; margin: 0 auto; background: #f4f4f9; }
+        .container { background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h2 { color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        #drop-zone { border: 2px dashed #ccc; padding: 40px; text-align: center; margin: 20px 0; border-radius: 8px; cursor: pointer; transition: 0.3s; }
+        #drop-zone:hover { border-color: #007bff; background: #f0f7ff; }
+        .progress-container { display: none; margin-top: 20px; }
+        .progress-bar { width: 100%; height: 20px; background: #eee; border-radius: 10px; overflow: hidden; }
+        .progress-fill { width: 0%; height: 100%; background: #28a745; transition: width 0.1s; }
+        #status { margin-top: 10px; font-weight: bold; color: #555; }
+        #download-list { margin-top: 20px; border-top: 1px solid #eee; padding-top: 10px; }
+        .download-item { display: flex; justify-content: space-between; align-items: center; padding: 8px; background: #f9f9f9; margin-bottom: 5px; border-radius: 4px; }
+        .btn-download { background: #007bff; color: white; padding: 5px 12px; text-decoration: none; border-radius: 4px; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Log File Splitter <small style="font-size: 0.5em; color: #888;">(Large File Support)</small></h2>
+    <p>분할 기준: <code>모든 그룹에 대한 백테스트 완료</code></p>
+    
+    <div id="drop-zone">
+        로그 파일을 여기에 드래그하거나 클릭하여 선택하세요 (1GB+ 가능)
+        <input type="file" id="file-input" style="display: none;">
+    </div>
+
+    <div class="progress-container" id="progress-container">
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+        <div id="status">파일 읽는 중... 0%</div>
+    </div>
+
+    <div id="download-list"></div>
+</div>
+
+<script>
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+const progressContainer = document.getElementById('progress-container');
+const progressFill = document.getElementById('progress-fill');
+const statusText = document.getElementById('status');
+const downloadList = document.getElementById('download-list');
+
+const DELIMITER = "모든 그룹에 대한 백테스트 완료";
+const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB씩 읽기
+
+dropZone.onclick = () => fileInput.click();
+fileInput.onchange = (e) => handleFile(e.target.files[0]);
+
+async function handleFile(file) {
+    if (!file) return;
+
+    // UI 초기화
+    downloadList.innerHTML = '';
+    progressContainer.style.display = 'block';
+    let offset = 0;
+    let fileCount = 1;
+    let currentLogParts = [];
+    let leftover = ""; // 이전 청크에서 잘린 문자열 보관
+
+    const decoder = new TextDecoder();
+
+    while (offset < file.size) {
+        const chunk = file.slice(offset, offset + CHUNK_SIZE);
+        const buffer = await chunk.arrayBuffer();
+        let text = decoder.decode(buffer, { stream: true });
+        
+        // 이전 청크의 마지막 부분과 합쳐서 검색
+        let combinedText = leftover + text;
+        let segments = combinedText.split(DELIMITER);
+        
+        // 마지막 세그먼트는 다음 청크에서 DELIMITER가 나올 수 있으므로 남겨둠
+        leftover = segments.pop();
+
+        for (let i = 0; i < segments.length; i++) {
+            currentLogParts.push(segments[i] + DELIMITER);
+            createDownloadLink(currentLogParts.join(""), fileCount++);
+            currentLogParts = []; // 초기화
+        }
+
+        offset += CHUNK_SIZE;
+        const percent = Math.min(100, Math.round((offset / file.size) * 100));
+        progressFill.style.width = percent + '%';
+        statusText.innerText = `분석 중... ${percent}% (파일 ${fileCount-1}개 발견)`;
+    }
+
+    // 남은 부분 처리
+    if (leftover.trim()) {
+        currentLogParts.push(leftover);
+        createDownloadLink(currentLogParts.join(""), fileCount++);
+    }
+
+    statusText.innerText = `완료! 총 ${fileCount-1}개의 파일이 생성되었습니다.`;
+}
+
+function createDownloadLink(content, index) {
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const fileName = `backtest_result_${index}.log`;
+
+    const item = document.createElement('div');
+    item.className = 'download-item';
+    item.innerHTML = `
+        <span>${fileName}</span>
+        <a href="${url}" download="${fileName}" class="btn-download">다운로드</a>
+    `;
+    downloadList.appendChild(item);
+    
+    // 선택 사항: 자동으로 모든 파일 다운로드를 트리거하려면 아래 주석 해제
+    // (단, 브라우저 설정에 따라 여러 파일 다운로드 권한을 허용해야 함)
+    // const a = document.createElement('a');
+    // a.href = url;
+    // a.download = fileName;
+    // a.click();
+}
+</script>
+
+</body>
+</html>
