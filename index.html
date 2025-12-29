@@ -2,35 +2,37 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>Ultimate Log Splitter (4GB+ & High Speed)</title>
+    <title>Log Splitter 4.0 (Enterprise Mode)</title>
     <style>
-        body { font-family: -apple-system, sans-serif; padding: 40px; background: #f8f9fa; color: #333; }
-        .container { max-width: 800px; margin: auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
-        #drop-zone { border: 3px dashed #dee2e6; padding: 60px; text-align: center; border-radius: 10px; cursor: pointer; background: #fff; transition: all 0.2s; }
-        #drop-zone:hover { border-color: #007bff; background: #f1f7ff; }
-        .status-box { margin: 20px 0; padding: 15px; border-radius: 8px; background: #e9ecef; font-weight: bold; }
-        .progress-bar { height: 20px; background: #eee; border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
-        .progress-fill { width: 0%; height: 100%; background: linear-gradient(90deg, #007bff, #00d4ff); transition: width 0.3s; }
-        .file-list { max-height: 400px; overflow-y: auto; margin-top: 20px; border-top: 2px solid #eee; }
-        .file-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid #eee; font-family: monospace; }
-        .download-btn { background: #28a745; color: white; padding: 6px 15px; border-radius: 5px; text-decoration: none; font-size: 0.9em; }
+        body { font-family: sans-serif; padding: 30px; background: #f4f7f6; color: #333; line-height: 1.5; }
+        .box { max-width: 800px; margin: auto; background: white; padding: 25px; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.08); }
+        #drop-zone { border: 3px dashed #adc5cf; padding: 50px; text-align: center; border-radius: 10px; cursor: pointer; background: #fafafa; margin-bottom: 20px; }
+        #drop-zone:hover { background: #edf7ff; border-color: #007bff; }
+        .progress-container { margin: 20px 0; }
+        .bar { height: 14px; background: #eee; border-radius: 7px; overflow: hidden; }
+        .fill { width: 0%; height: 100%; background: #007bff; transition: width 0.1s; }
+        .info { font-size: 0.9em; color: #666; margin-bottom: 5px; }
+        .list { border-top: 1px solid #eee; margin-top: 20px; max-height: 400px; overflow-y: auto; }
+        .file-card { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid #f1f1f1; }
+        .dl-btn { background: #007bff; color: white; padding: 6px 14px; border-radius: 4px; text-decoration: none; font-size: 0.85em; }
+        .warning { color: #d9534f; font-weight: bold; font-size: 0.8em; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <h2>로그 분할기 3.0 <small>(초대용량 모드)</small></h2>
-    <p>4GB 이상의 대용량 파일도 바이트 단위로 분석하여 멈춤 없이 분할합니다.</p>
+<div class="box">
+    <h2>초대용량 로그 분할기 4.0</h2>
+    <p class="info">512MB 문자열 제한을 우회하여 4GB+ 파일을 바이트 단위로 분석합니다.</p>
     
-    <div id="drop-zone">이곳에 .log 파일을 드래그하거나 클릭하세요</div>
+    <div id="drop-zone">파일을 여기에 드롭하거나 클릭하세요 (최대 용량 무제한)</div>
     <input type="file" id="file-input" style="display:none">
 
-    <div class="status-box" id="status-container">
-        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-        <div id="status-text">대기 중...</div>
+    <div class="progress-container">
+        <div class="info" id="status-text">준비 완료</div>
+        <div class="bar"><div class="fill" id="progress-fill"></div></div>
     </div>
 
-    <div class="file-list" id="file-list"></div>
+    <div id="file-list" class="list"></div>
 </div>
 
 <script>
@@ -40,110 +42,92 @@ const progressFill = document.getElementById('progress-fill');
 const statusText = document.getElementById('status-text');
 const fileList = document.getElementById('file-list');
 
-// 구분자 설정 (UTF-8 바이트)
-const DELIMITER = "모든 그룹에 대한 백테스트 완료";
-const DELIMITER_BYTES = new TextEncoder().encode(DELIMITER);
+// 구분자 (UTF-8 바이트 배열)
+const TARGET_TEXT = "모든 그룹에 대한 백테스트 완료";
+const TARGET_BYTES = new TextEncoder().encode(TARGET_TEXT);
 
 dropZone.onclick = () => fileInput.click();
-fileInput.onchange = (e) => processLargeFile(e.target.files[0]);
+fileInput.onchange = (e) => startProcessing(e.target.files[0]);
 
-async function processLargeFile(file) {
+async function startProcessing(file) {
     if (!file) return;
-
-    // 초기화
-    fileList.innerHTML = '';
-    statusText.innerText = "분석 시작...";
     
+    // UI 초기화
+    fileList.innerHTML = '';
     let startOffset = 0;
     let currentPos = 0;
-    let foundCount = 0;
+    let count = 0;
     
-    // 1GB당 한 번씩만 끊기지 않도록 CHUNK_SIZE를 32MB로 설정
-    const CHUNK_SIZE = 32 * 1024 * 1024; 
+    // 청크 크기를 10MB로 작게 잡아 메모리 부하를 방지
+    const CHUNK_SIZE = 10 * 1024 * 1024; 
 
     while (currentPos < file.size) {
-        // 파일을 쪼개서 읽음
-        const endPos = Math.min(currentPos + CHUNK_SIZE, file.size);
-        const blob = file.slice(currentPos, endPos + DELIMITER_BYTES.length);
-        const arrayBuffer = await blob.arrayBuffer();
-        const view = new Uint8Array(arrayBuffer);
+        const slice = file.slice(currentPos, currentPos + CHUNK_SIZE + TARGET_BYTES.length);
+        const buffer = await slice.arrayBuffer();
+        const data = new Uint8Array(buffer);
 
-        let offsetInChunk = 0;
-
-        while (true) {
-            // 바이트 기반 고속 검색
-            const idx = findIndex(view, DELIMITER_BYTES, offsetInChunk);
-            
-            if (idx === -1) break;
-
-            // 찾았을 경우
-            const absoluteEnd = currentPos + idx + DELIMITER_BYTES.length;
-            addFileItem(file, startOffset, absoluteEnd, ++foundCount);
-            
-            startOffset = absoluteEnd;
-            offsetInChunk = idx + DELIMITER_BYTES.length;
-        }
-
-        currentPos += CHUNK_SIZE;
-        
-        // UI 업데이트 및 브라우저 휴식 (이게 없으면 멈춤)
-        const progress = Math.min(100, (currentPos / file.size) * 100).toFixed(1);
-        progressFill.style.width = progress + '%';
-        statusText.innerText = `분석 중: ${progress}% (발견된 로그: ${foundCount}개)`;
-        
-        // 브라우저가 다른 일을 할 수 있게 0.001초 쉼
-        await new Promise(resolve => setTimeout(resolve, 0));
-    }
-
-    // 마지막 조각 처리
-    if (startOffset < file.size) {
-        addFileItem(file, startOffset, file.size, ++foundCount);
-    }
-
-    statusText.innerText = `분석 완료! 총 ${foundCount}개의 파일을 찾았습니다.`;
-}
-
-/**
- * Uint8Array에서 특정 바이트 패턴의 인덱스를 찾는 최적화 함수
- */
-function findIndex(source, pattern, start) {
-    for (let i = start; i <= source.length - pattern.length; i++) {
-        if (source[i] === pattern[0]) {
+        // 바이트 단위 고속 검색
+        for (let i = 0; i <= data.length - TARGET_BYTES.length; i++) {
             let match = true;
-            for (let j = 1; j < pattern.length; j++) {
-                if (source[i + j] !== pattern[j]) {
+            for (let j = 0; j < TARGET_BYTES.length; j++) {
+                if (data[i + j] !== TARGET_BYTES[j]) {
                     match = false;
                     break;
                 }
             }
-            if (match) return i;
+
+            if (match) {
+                const endOffset = currentPos + i + TARGET_BYTES.length;
+                createDownloadItem(file, startOffset, endOffset, ++count);
+                startOffset = endOffset;
+                // 검색 포인터 이동
+                i += TARGET_BYTES.length - 1;
+            }
         }
+
+        currentPos += CHUNK_SIZE;
+        
+        // 진행률 표시 및 UI 렌더링을 위한 강제 휴식 (중요!)
+        const percent = ((currentPos / file.size) * 100).toFixed(1);
+        progressFill.style.width = percent + '%';
+        statusText.innerText = `분석 중... ${percent}% (발견: ${count}개)`;
+        
+        // 512MB 이상 문구가 안 나오면 경고 표시
+        if (currentPos - startOffset > 600 * 1024 * 1024) {
+            statusText.innerText = `주의: 현재 구간이 600MB를 넘었습니다. 검색 중...`;
+        }
+
+        // 브라우저에게 제어권을 넘겨 화면 멈춤 방지
+        await new Promise(r => setTimeout(r, 0));
     }
-    return -1;
+
+    // 마지막 남은 부분 처리
+    if (startOffset < file.size) {
+        createDownloadItem(file, startOffset, file.size, ++count);
+    }
+    statusText.innerText = `완료! 총 ${count}개의 로그를 분할했습니다.`;
 }
 
-function addFileItem(originalFile, start, end, index) {
+function createDownloadItem(file, start, end, index) {
     const size = end - start;
     if (size <= 0) return;
 
-    const sliceBlob = originalFile.slice(start, end);
-    const url = URL.createObjectURL(sliceBlob);
-    const filename = `backtest_part_${String(index).padStart(3, '0')}.log`;
+    // file.slice는 실제 메모리를 쓰지 않는 참조값임
+    const blob = file.slice(start, end);
+    const url = URL.createObjectURL(blob);
+    const name = `part_${String(index).padStart(3, '0')}.log`;
 
     const div = document.createElement('div');
-    div.className = 'file-item';
+    div.className = 'file-card';
     div.innerHTML = `
-        <span>${filename} (${formatSize(size)})</span>
-        <a href="${url}" download="${filename}" class="download-btn">다운로드</a>
+        <div>
+            <strong>${name}</strong> 
+            <span style="font-size:0.8em; color:#999; margin-left:10px;">${(size / 1024 / 1024).toFixed(2)} MB</span>
+            ${size > 500 * 1024 * 1024 ? '<br><span class="warning">⚠️ 이 파일은 매우 큽니다 (다운로드 시 브라우저가 느려질 수 있음)</span>' : ''}
+        </div>
+        <a href="${url}" download="${name}" class="dl-btn">다운로드</a>
     `;
     fileList.appendChild(div);
-}
-
-function formatSize(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-    return (bytes / 1073741824).toFixed(1) + ' GB';
 }
 </script>
 
